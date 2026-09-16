@@ -1,0 +1,14 @@
+{
+  "network": "studionet",
+  "chain_id": 61999,
+  "chain_id_hex": "0xf22f",
+  "rpc": "https://studio.genlayer.com/api",
+  "genlayer_cli": "0.39.1",
+  "contract_runtime_family": "Studionet / py-genlayer v0.2.x style",
+  "forbidden_networks": [
+    "studionet-dev",
+    "studio-next",
+    "bradbury"
+  ],
+  "forbidden_chain_ids": [61997]
+}

@@ -1,0 +1,2 @@
+# RiskClock has no off-chain runtime dependency.
+# The Intelligent Contracts declare their GenLayer runtime dependency inline.

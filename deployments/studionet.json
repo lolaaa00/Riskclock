@@ -1,0 +1,76 @@
+{
+  "network": "studionet",
+  "chain_id": 61999,
+  "rpc": "https://studio.genlayer.com/api",
+  "cli_version": "0.39.1",
+  "riskclock_address": "0x9374d4BEC24A58a1f3b639c21C5Dd79f68B2C1Cd",
+  "executor_address": "0x3E329F774aa86EEEb1096dDbFEA6919464E511E9",
+  "executor_target_ref": "riskclock-demo-counter",
+  "policies": [
+    {
+      "policy_id": 2,
+      "name": "Treasury Risk Policy",
+      "config_source": "README.md sample policy config",
+      "definition_hash": "70496e5a74912432f1353cdd400e633ed1b5eebef398629bb518b8f1af446fd6",
+      "status": "SEALED",
+      "active": true,
+      "approvers": [
+        "0xaa18eCD158AEC67c75A51768b747cb3247A21689",
+        "0x6cE473fb2617edcf2beF9dbF133924337016BebE"
+      ],
+      "verified_via": "genlayer call ... get_policy --args 2"
+    },
+    {
+      "policy_id": 3,
+      "name": "Fast Delay Approval Demo Policy",
+      "config_source": "custom low-delay config for live demo of the approval/delay gate",
+      "definition_hash": "25c88a08e738aef73d0cf1c4406fa8705117f7c87be15e75ec1718546cf9267f",
+      "status": "SEALED",
+      "active": true,
+      "approvers": [
+        "0xaa18eCD158AEC67c75A51768b747cb3247A21689",
+        "0xD7DdE3194C3b750012745daB2De1BF05DBafB52c"
+      ],
+      "verified_via": "genlayer call ... get_policy --args 3"
+    }
+  ],
+  "actions": [
+    {
+      "action_id": 1,
+      "policy_id": 2,
+      "target_ref": "riskclock-demo-counter",
+      "operation": "INCREMENT_COUNTER",
+      "value": 0,
+      "action_hash": "10051ea2e14189fb92828f29773838b0e96ce62d54849b31446c47afc2639c8f",
+      "submit_tx_hash": "0xdc037932b28940b5ec44b775fea9cdb3ee683b9bd08d3302027eb1fa3a5295bd",
+      "status": "PENDING",
+      "note": "submitted successfully; assess_action was attempted 8 times and every attempt finalized with MAJORITY_DISAGREE (see assess_disagreement_evidence below), so this action never reached ASSESSED. A follow-up execute_increment call against this unassessed action correctly reverted with 'EXPECTED: RiskClock gate is not executable' (tx 0x5bc682c55b3fe95fe35d08b0a7177f9e3de64815d168bee7f0002ccbdfddc171), proving the consumer's fail-closed gate check works, but no successful execution or replay-rejection was demonstrated for this action."
+    }
+  ],
+  "assess_disagreement_evidence": {
+    "summary": "assess_action(1) was called 8 times across three script runs. Every single call finalized with consensus result MAJORITY_DISAGREE, never MAJORITY_AGREE. Inspecting the receipts with `genlayer receipt <hash>` shows leader execution_result SUCCESS in every case; the disagreement is validators independently re-running the same GenLayer semantic risk assessment (gl.nondet.exec_prompt) and voting 'disagree' because they derive a different risk tier than the leader for this trivial low-risk action. One receipt (attempt 4) shows the leader node running primary_model 'policy:prd-mistral' while earlier successful policy transactions on this same account ran 'policy:prd-glm' -- i.e. different Studionet validator nodes are currently routed to different underlying LLM families, and those models disagree with each other on how conservatively to rate a benign INCREMENT_COUNTER action. This is the contract's designed fail-safe (RiskClock rejects a leader whose result the validator cannot independently reproduce within the allowed tier/variance) operating correctly on live infrastructure; it is real, not fabricated, evidence, and it is why this action could not be pushed further through the live test plan in this session.",
+    "attempts": [
+      {"attempt": 1, "run": 1, "tx_hash": "0x73e641bff7f7238329e6ff5705c0ec2d6c588934f4b82b627c36fb7239560897", "result": "MAJORITY_DISAGREE"},
+      {"attempt": 1, "run": 2, "tx_hash": "0xf568847a297475e6752f9d0017a5d4aabe874aa179638fc5f113834a0107ff97", "result": "MAJORITY_DISAGREE"},
+      {"attempt": 2, "run": 2, "tx_hash": "0x3de1f788dee47ad49eebcebd7a7daca17170f837127b5f97a4776e56e78e762d", "result": "MAJORITY_DISAGREE"},
+      {"attempt": 3, "run": 2, "tx_hash": "0xdf14fc47829cc84d62a620f651f5e2edc7abf1fe8ac98a5dc11b1d96689a120d", "result": "MAJORITY_DISAGREE"},
+      {"attempt": 4, "run": 2, "tx_hash": "0xba286d942f409dcb01efcc5fda84d4d73137faad0ea88c74372f7648944fd750", "result": "MAJORITY_DISAGREE", "note": "leader node primary_model = policy:prd-mistral"},
+      {"attempt": 5, "run": 2, "tx_hash": "0xfd3e14c5b47c194d648dfbc01ad824ab9a6e5bbf42e612fddb9d2d1415c84123", "result": "MAJORITY_DISAGREE"},
+      {"attempt": 1, "run": 3, "tx_hash": "0x01ba7fef7a083ee5e232c00c496af8d13c4708a5d3c71b9e67d85c521df612ea", "result": "MAJORITY_DISAGREE"},
+      {"attempt": 2, "run": 3, "tx_hash": "0xe690efcf45f87e42e54cee1e40dfad9fe454bf2a5017ce1a392a4d13c0ac8dcb", "result": "MAJORITY_DISAGREE"}
+    ]
+  },
+  "policy_lifecycle_transactions": [
+    {"label": "policy_b_add_bob", "tx_hash": "0xd572bbc802510e0ab65b224c7cd8425d89ae53a349371b9d37564e17bc2cfe2c", "result": "MAJORITY_AGREE"}
+  ],
+  "not_completed": [
+    "assess_action reaching ASSESSED for any submitted action (blocked by live cross-model validator disagreement described above)",
+    "low-risk execute_increment succeeding and counter advancing",
+    "replay rejection after a successful execute",
+    "high-risk assessment tier/friction verification",
+    "two-approver + delay-gate demo on Policy B",
+    "policy-pause invalidation proof on an assessed action"
+  ],
+  "explorer_base": "https://genlayer-explorer.vercel.app/tx/",
+  "notes": "Real evidence only. Both contracts are live and independently verified via `genlayer schema <address>` and multiple successful `genlayer call`/`genlayer write` round-trips. Both policies are genuinely sealed on-chain with the definition hashes above (re-verified via get_policy immediately before writing this file). Action 1 is genuinely submitted and PENDING on-chain. Every other step of docs/LIVE_TEST_PLAN.md beyond policy sealing was blocked by the live assess_action consensus disagreement documented above; nothing beyond what is listed here was executed or should be assumed."
+}
