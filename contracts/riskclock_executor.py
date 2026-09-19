@@ -22,6 +22,9 @@ class IRiskClock:
         pass
 
 
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
+
 @allow_storage
 @dataclass
 class ExecutionReceipt:
@@ -38,7 +41,14 @@ class RiskClockExecutor(gl.Contract):
     The consumer exposes exactly one operation, INCREMENT_COUNTER. The submitted
     RiskClock action must target this executor's immutable target_ref and bind
     the exact amount through payload_hash. Replay is impossible because each
-    action hash can execute only once here.
+    action hash (which is unique per RiskClock submission, including when two
+    submissions are otherwise byte-identical) can execute only once here.
+
+    Authorization boundary: RiskClock answers "does this exact action satisfy
+    its required friction?" -- it does not itself grant blanket authority to
+    call this contract. If the action bound a non-zero intended_executor, only
+    that address may trigger execution here. "LOW tier + zero approvals + zero
+    delay" never means "anyone may execute this."
     """
 
     riskclock_address: Address
@@ -83,6 +93,11 @@ class RiskClockExecutor(gl.Contract):
             raise gl.vm.UserError("EXPECTED: action hash mismatch")
         if str(action.get("policy_hash", "")).lower() != str(expected_policy_hash).strip().lower():
             raise gl.vm.UserError("EXPECTED: policy hash mismatch")
+
+        intended_executor = str(action.get("intended_executor", ZERO_ADDRESS)).lower()
+        if intended_executor != ZERO_ADDRESS.lower():
+            if intended_executor != str(gl.message.sender_address).lower():
+                raise gl.vm.UserError("EXPECTED: sender is not the intended executor for this action")
 
         if not riskclock.view().is_executable(
             action_id,

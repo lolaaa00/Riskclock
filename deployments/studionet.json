@@ -3,74 +3,195 @@
   "chain_id": 61999,
   "rpc": "https://studio.genlayer.com/api",
   "cli_version": "0.39.1",
-  "riskclock_address": "0x9374d4BEC24A58a1f3b639c21C5Dd79f68B2C1Cd",
-  "executor_address": "0x3E329F774aa86EEEb1096dDbFEA6919464E511E9",
+  "source_commit_note": "The commit that introduces this evidence file also deploys these contracts; its own SHA cannot be embedded in its own content, so treat source_sha256 below (independent of any commit rewrite) as the authoritative proof that the deployed bytecode matches the contracts/*.py in this repository. The pushed commit introducing this file is the HEAD of https://github.com/lolaaa00/Riskclock at the time of this deployment.",
+  "source_sha256": {
+    "contracts/riskclock.py": "48c2ba2c7c3c85a2cf005e8e5044967027ce70163a661d389c88d5bc2f9a1064",
+    "contracts/riskclock_executor.py": "6364292fe99e158defbbfe0aa541180f4736c5f309d00aa27534b0a6dd487175"
+  },
+  "riskclock_address": "0xAB3D753dc93c3d29416Ad926f8Ab6212f5ae25ec",
+  "riskclock_deploy_tx": "0x0ee11281d02a7fc126569fbd52388cc926da2257510b397305e182e3c685d13d",
+  "executor_address": "0x8f96b15FE828356575Ae4Ca6a02A56d4d5723901",
+  "executor_deploy_tx": "0x9e69b77e7496cbbb2e22e3452388dfcb0a27496b84f7bb173861072e28e2b6f3",
   "executor_target_ref": "riskclock-demo-counter",
+  "deployment_notes": "Both contracts re-verified against source via `genlayer schema <address>` immediately after deployment (revoke_action, intended_executor, assessment_attempts, last_assessment_result all present and matching). This is a fresh deployment of the corrected contract source; the previous session's addresses (0x9374d4BEC24A58a1f3b639c21C5Dd79f68B2C1Cd / 0x3E329F774aa86EEEb1096dDbFEA6919464E511E9) ran the pre-fix source and are superseded -- see historical_pre_fix_deployment below.",
+
+  "known_issue_discovered_and_fixed_this_session": "During policy setup, add_approver/seal_policy calls made through genlayer_py's write_contract() with a raw address string silently reverted on-chain (AttributeError inside the contract's storage layer) despite the transaction reporting FINALIZED/MAJORITY_AGREE at the top level -- validators were agreeing on the ERROR outcome, not a success. Root cause: Address-typed contract arguments must be explicitly wrapped (genlayer_py.types.CalldataAddress) when submitted via the Python SDK; a raw hex string is not auto-converted. Confirmed via `genlayer receipt <hash>` showing the leader's Python traceback. Fixed in the calling script; not a contract bug. The 8 transaction hashes below under pre_fix_reverted_attempts are the real, on-chain reverted attempts from before this fix.",
+  "pre_fix_reverted_attempts": [
+    {"label": "policy_a_add_owner", "tx_hash": "0xfcc2909ecfa1d73793ae70b1846d9117ea3f40c743e7546554779f2790fee3cf", "result": "reverted (AttributeError in contract storage layer, agreed by consensus)"},
+    {"label": "policy_a_add_bob", "tx_hash": "0xb8cc2264806ebe10db277eb931f01ccdb847518545341ebfd14d6aa8cb50d604", "result": "reverted"},
+    {"label": "policy_a_seal", "tx_hash": "0x5e5d9afec845b4a950f6dec0afd89c4000aec6391dede9cf593f83b98a7b7af7", "result": "reverted with EXPECTED: policy requires more approvals than registered approvers (because the prior add_approver calls had reverted, leaving zero approvers)"},
+    {"label": "policy_b_add_owner", "tx_hash": "0xc14250f9133c2ff4f178ee35a5b6b93ad7c9306d08847009846ed8a8a76b7b3b", "result": "reverted"},
+    {"label": "policy_b_add_bob", "tx_hash": "0xd232a2a00b7902e75c1cd0184ef9ce923a48faccf6583c4708ad6b4b0fdc9f27", "result": "reverted"},
+    {"label": "policy_b_seal", "tx_hash": "0x50024dcc43fe650d714544543997bc46e641d05374ff0810da8dfd5d015d0858", "result": "reverted"}
+  ],
   "policies": [
     {
-      "policy_id": 2,
+      "policy_id": 1,
       "name": "Treasury Risk Policy",
       "config_source": "README.md sample policy config",
-      "definition_hash": "70496e5a74912432f1353cdd400e633ed1b5eebef398629bb518b8f1af446fd6",
+      "definition_hash": "354e64ff4e9ba96c67453255f77d5acfdd25ccb1656e71b7631e13bd2873d594",
       "status": "SEALED",
       "active": true,
-      "approvers": [
-        "0xaa18eCD158AEC67c75A51768b747cb3247A21689",
-        "0x6cE473fb2617edcf2beF9dbF133924337016BebE"
-      ],
-      "verified_via": "genlayer call ... get_policy --args 2"
+      "approvers": ["0xaa18eCD158AEC67c75A51768b747cb3247A21689", "0xDf4BD302Ce78B36C987aC34ce6B2592491984646"],
+      "create_tx": "0x9a981b0272418b768d7d67da670e904b37237507f58e75a91e1f36f663d7cecd",
+      "add_owner_tx": "0x133d71848fd41d76d43450e9551f8e293f945f397445e8131034792081c486bb",
+      "add_bob_tx": "0xc93c039dce92924983a77455bdd408b9ed54dd7e931664700ba9c8682bd21479",
+      "seal_tx": "0x588222f684aa13b27db411e43954c5361c2c9ffda0b65339e448949955b0c5a7",
+      "verified_via": "genlayer call ... get_policy --args 1, re-read after evidence collection"
     },
     {
-      "policy_id": 3,
+      "policy_id": 2,
       "name": "Fast Delay Approval Demo Policy",
-      "config_source": "custom low-delay config for live demo of the approval/delay gate",
-      "definition_hash": "25c88a08e738aef73d0cf1c4406fa8705117f7c87be15e75ec1718546cf9267f",
+      "config_source": "custom low-delay config for live demo of the approval/delay gate (medium=3s, high=5s, critical=8s)",
+      "definition_hash": "9a2128bdb8478c4a0579d25ec87472d30e56671dcd599f2510864380eb41c85c",
       "status": "SEALED",
       "active": true,
-      "approvers": [
-        "0xaa18eCD158AEC67c75A51768b747cb3247A21689",
-        "0xD7DdE3194C3b750012745daB2De1BF05DBafB52c"
-      ],
-      "verified_via": "genlayer call ... get_policy --args 3"
+      "approvers": ["0xaa18eCD158AEC67c75A51768b747cb3247A21689", "0xDf4BD302Ce78B36C987aC34ce6B2592491984646"],
+      "create_tx": "0xc59e57b37038c0147ed1c58bc3cf66c0ce6101f45275c91ef3b33097cdb2ec00",
+      "add_owner_tx": "0xef01f135181130bd427a51a0ec63d1656055d955dcbeddbd8a9d11df2facdc7c",
+      "add_bob_tx": "0x5da4e892c623f68750ed81aeef200274d6c7ab30925e3c8ae48ca7cada6ba1c2",
+      "seal_tx": "0x39df1153c9e627b4ac68ee4b6b64582913f63e7a24fe9f914687059725dc3bdf",
+      "verified_via": "genlayer call ... get_policy --args 2, re-read after evidence collection"
     }
   ],
-  "actions": [
-    {
+  "live_lifecycle_cases": {
+    "case_a_low_risk_success": {
+      "description": "Submit a low-risk INCREMENT_COUNTER action, assess it, reach real MAJORITY_AGREE substantive consensus on attempt 1, execute through the consumer.",
       "action_id": 1,
+      "policy_id": 1,
+      "action_hash": "0c7d1c8de7d2e77d1a5f4fafb656a33396c82acc334b09fc970efde59f0516a6",
+      "submit_tx": "0x8f3ab333fee5ac7fafe9232ac5a352222f530204856ee57ce100663b2a628df3",
+      "assess_tx": "0x79c09129c544321632983cb0c92ca806df53ed427af5a18ef9ce5011ed7ff2cc",
+      "assess_attempts": 1,
+      "assess_result": "MAJORITY_AGREE",
+      "tier": "LOW",
+      "weighted_score": 0,
+      "delay_seconds": 0,
+      "approvals_required": 0,
+      "execute_tx": "0xf4e3bbbce76e046a7e0e4510da385630f56e32a96b0e26f55b69969fe052e481",
+      "counter_after": 7,
+      "result": "PASS -- real substantive consensus reached on the first attempt, confirming the gl.vm.Return validator fix works live"
+    },
+    "case_b_replay": {
+      "description": "Attempt to execute the exact same authorized action a second time.",
+      "action_id": 1,
+      "replay_tx": "0x287eb9f8bb3091f58a795c7f7dd1fdc011100c465f7816c109f2e0df206e7831",
+      "counter_before": 7,
+      "counter_after": 7,
+      "result": "PASS -- replay correctly rejected, counter did not advance"
+    },
+    "case_g_hash_binding": {
+      "description": "Call is_executable with a wrong action hash and a wrong policy hash.",
+      "action_id": 1,
+      "wrong_action_hash_is_executable": false,
+      "wrong_policy_hash_is_executable": false,
+      "result": "PASS"
+    },
+    "case_c_high_critical_friction": {
+      "description": "Submit a high-value (10000) action on Policy B, assess it (deterministic CRITICAL via value floor + real semantic contribution), reject a non-approver, collect 2 real approvals, wait for the real delay, execute.",
+      "action_id": 2,
       "policy_id": 2,
-      "target_ref": "riskclock-demo-counter",
-      "operation": "INCREMENT_COUNTER",
-      "value": 0,
-      "action_hash": "10051ea2e14189fb92828f29773838b0e96ce62d54849b31446c47afc2639c8f",
-      "submit_tx_hash": "0xdc037932b28940b5ec44b775fea9cdb3ee683b9bd08d3302027eb1fa3a5295bd",
-      "status": "PENDING",
-      "note": "submitted successfully; assess_action was attempted 8 times and every attempt finalized with MAJORITY_DISAGREE (see assess_disagreement_evidence below), so this action never reached ASSESSED. A follow-up execute_increment call against this unassessed action correctly reverted with 'EXPECTED: RiskClock gate is not executable' (tx 0x5bc682c55b3fe95fe35d08b0a7177f9e3de64815d168bee7f0002ccbdfddc171), proving the consumer's fail-closed gate check works, but no successful execution or replay-rejection was demonstrated for this action."
+      "action_hash": "dec3f2ac7920f8c17eb3ff472ea7dea8a7815e9b51efa534b8dfcfd7133d5c79",
+      "submit_tx": "0xfe8dd1be1c706a4cd17a3e8164bd8c19489d1e59aef731472cb63ff6c6175086",
+      "assess_tx": "0xdd8087fc84acad29d4eb83bb2df1a7961fae02dad96efdb4a0081e06548dde76",
+      "assess_attempts": 1,
+      "tier": "CRITICAL",
+      "weighted_score": 400,
+      "risk_vector": {"reversibility": 0, "privilege_expansion": 0, "external_effect": 1, "recovery_difficulty": 0, "value_at_risk": 3},
+      "delay_seconds": 8,
+      "approvals_required": 2,
+      "nonapprover_reject_tx": "0xc39726d62725beefd6aa9c3419ac15fadc8bea171888a17a78f9b7c82e7eac2e",
+      "nonapprover_correctly_rejected": true,
+      "approve_owner_tx": "0xe88740c4abecb4e88474e0754b75ce65cd096348cae23a97fda245e79758e7fc",
+      "approve_bob_tx": "0x8000f5481d63ccf8d069b6a4b491f8909d7890a5b09cc976b1a85e1de90d2992",
+      "is_executable_after_1_approval": false,
+      "is_executable_after_2_approvals_and_delay": true,
+      "execute_tx": "0xf49261ba5cef01e5bc251b89a9037920a3b034c73c308b457b3c8e17f5e03cdc",
+      "counter_after": 10,
+      "result": "PASS -- full approval + delay lifecycle proven live: non-approver rejected, partial approvals blocked, execution succeeded only once all deterministic conditions were satisfied"
+    },
+    "case_d_pause": {
+      "description": "Assess a fresh low-risk action, confirm executable, pause the policy, confirm no longer executable, reactivate the policy for subsequent cases.",
+      "action_id": 3,
+      "policy_id": 1,
+      "submit_tx": "0x84973e7e683996c5119d8415e40d75d92eb60bdbeaf3cd3ead558bed0f1e9257",
+      "assess_tx": "0xa074c02c6f5e6d644d2f332ac505db135d663082cf40134be7cdd2cf8d80b60f",
+      "is_executable_before_pause": true,
+      "pause_tx": "0x764b3c851b962c8f02ffad3a95a9dc5331f3b5f600803295893f3da53f83032a",
+      "is_executable_after_pause": false,
+      "reactivate_tx": "0x739e137f1c9fc615c0f508789b0d19947b908c8c080a3e3613c42f1d13c99f2a",
+      "result": "PASS"
+    },
+    "case_f_revocation": {
+      "description": "Assess a fresh low-risk action, confirm executable, revoke it as the policy owner, confirm permanently non-executable, then pause+reactivate the policy again and confirm revocation was not undone.",
+      "action_id": 4,
+      "policy_id": 1,
+      "submit_tx": "0x5f9877e720bcf671bfe2f43326ed4a3d5ff4f15601688bc6bc9d54803683629b",
+      "assess_tx": "0x805dd661b0fabe7fe44ec6fe74538cb11bd0dbd6b21b54d10c60bea556e3146b",
+      "is_executable_before_revoke": true,
+      "revoke_tx": "0x3d211cd8d0ac66f47a2c5513766ca74841c3c29a4b9ce167174a588aaf2ef391",
+      "revoked_by": "0xaa18eCD158AEC67c75A51768b747cb3247A21689",
+      "is_executable_after_revoke": false,
+      "pause_then_tx": "0xf7ad8369c8ae20e22fbe90b25a60c2780dc3aad9e191395a21cb6f59b6d254cc",
+      "reactivate_then_tx": "0xf7d5af69959f4daea9bc28792f1816a22ae8d228b66fe98043ee86f1ac6e5e8b",
+      "is_executable_after_policy_reactivate": false,
+      "result": "PASS -- revocation survived a subsequent policy pause/reactivate cycle, proving it is independent of policy-level state"
+    },
+    "case_e_retryable_non_decision": {
+      "description": "MODEL_OUTPUT_INVALID and SOURCE_UNAVAILABLE non-decisions cannot be forced on demand against the live network (no mock hook exists there). Exercised instead in GenLayer Direct Mode, which supports deterministic mock injection.",
+      "evidence_type": "SIMULATED (Direct Mode), not live chain evidence",
+      "tests": [
+        "tests/direct/test_riskclock.py::test_malformed_model_output_is_a_retryable_non_decision",
+        "tests/direct/test_riskclock.py::test_malformed_output_validator_agreement_is_deterministic",
+        "tests/direct/test_riskclock.py::test_non_decision_outcome_mismatch_is_rejected",
+        "tests/direct/test_riskclock.py::test_source_unavailable_is_a_retryable_non_decision",
+        "tests/direct/test_riskclock.py::test_retry_after_non_decision_can_reach_assessed",
+        "tests/direct/test_riskclock.py::test_assessment_attempts_advance_and_exhaust"
+      ],
+      "result": "PASS (31/31 Direct Mode tests pass, see local verification below)"
     }
-  ],
-  "assess_disagreement_evidence": {
-    "summary": "assess_action(1) was called 8 times across three script runs. Every single call finalized with consensus result MAJORITY_DISAGREE, never MAJORITY_AGREE. Inspecting the receipts with `genlayer receipt <hash>` shows leader execution_result SUCCESS in every case; the disagreement is validators independently re-running the same GenLayer semantic risk assessment (gl.nondet.exec_prompt) and voting 'disagree' because they derive a different risk tier than the leader for this trivial low-risk action. One receipt (attempt 4) shows the leader node running primary_model 'policy:prd-mistral' while earlier successful policy transactions on this same account ran 'policy:prd-glm' -- i.e. different Studionet validator nodes are currently routed to different underlying LLM families, and those models disagree with each other on how conservatively to rate a benign INCREMENT_COUNTER action. This is the contract's designed fail-safe (RiskClock rejects a leader whose result the validator cannot independently reproduce within the allowed tier/variance) operating correctly on live infrastructure; it is real, not fabricated, evidence, and it is why this action could not be pushed further through the live test plan in this session.",
-    "attempts": [
-      {"attempt": 1, "run": 1, "tx_hash": "0x73e641bff7f7238329e6ff5705c0ec2d6c588934f4b82b627c36fb7239560897", "result": "MAJORITY_DISAGREE"},
-      {"attempt": 1, "run": 2, "tx_hash": "0xf568847a297475e6752f9d0017a5d4aabe874aa179638fc5f113834a0107ff97", "result": "MAJORITY_DISAGREE"},
-      {"attempt": 2, "run": 2, "tx_hash": "0x3de1f788dee47ad49eebcebd7a7daca17170f837127b5f97a4776e56e78e762d", "result": "MAJORITY_DISAGREE"},
-      {"attempt": 3, "run": 2, "tx_hash": "0xdf14fc47829cc84d62a620f651f5e2edc7abf1fe8ac98a5dc11b1d96689a120d", "result": "MAJORITY_DISAGREE"},
-      {"attempt": 4, "run": 2, "tx_hash": "0xba286d942f409dcb01efcc5fda84d4d73137faad0ea88c74372f7648944fd750", "result": "MAJORITY_DISAGREE", "note": "leader node primary_model = policy:prd-mistral"},
-      {"attempt": 5, "run": 2, "tx_hash": "0xfd3e14c5b47c194d648dfbc01ad824ab9a6e5bbf42e612fddb9d2d1415c84123", "result": "MAJORITY_DISAGREE"},
-      {"attempt": 1, "run": 3, "tx_hash": "0x01ba7fef7a083ee5e232c00c496af8d13c4708a5d3c71b9e67d85c521df612ea", "result": "MAJORITY_DISAGREE"},
-      {"attempt": 2, "run": 3, "tx_hash": "0xe690efcf45f87e42e54cee1e40dfad9fe454bf2a5017ce1a392a4d13c0ac8dcb", "result": "MAJORITY_DISAGREE"}
-    ]
   },
-  "policy_lifecycle_transactions": [
-    {"label": "policy_b_add_bob", "tx_hash": "0xd572bbc802510e0ab65b224c7cd8425d89ae53a349371b9d37564e17bc2cfe2c", "result": "MAJORITY_AGREE"}
-  ],
-  "not_completed": [
-    "assess_action reaching ASSESSED for any submitted action (blocked by live cross-model validator disagreement described above)",
-    "low-risk execute_increment succeeding and counter advancing",
-    "replay rejection after a successful execute",
-    "high-risk assessment tier/friction verification",
-    "two-approver + delay-gate demo on Policy B",
-    "policy-pause invalidation proof on an assessed action"
-  ],
-  "explorer_base": "https://genlayer-explorer.vercel.app/tx/",
-  "notes": "Real evidence only. Both contracts are live and independently verified via `genlayer schema <address>` and multiple successful `genlayer call`/`genlayer write` round-trips. Both policies are genuinely sealed on-chain with the definition hashes above (re-verified via get_policy immediately before writing this file). Action 1 is genuinely submitted and PENDING on-chain. Every other step of docs/LIVE_TEST_PLAN.md beyond policy sealing was blocked by the live assess_action consensus disagreement documented above; nothing beyond what is listed here was executed or should be assumed."
+  "final_state": {
+    "executor_counter": 10,
+    "policy_1_status": "SEALED, active",
+    "policy_2_status": "SEALED, active",
+    "action_1_status": "ASSESSED (executed, replay-blocked)",
+    "action_2_status": "ASSESSED (executed)",
+    "action_3_status": "ASSESSED (used for pause demo, policy reactivated afterward)",
+    "action_4_status": "REVOKED (permanent)"
+  },
+  "local_verification": {
+    "unit_tests": "6/6 pass (python -m unittest discover -s tests/unit)",
+    "direct_mode_tests": "31/31 pass (pytest -q tests/direct, genlayer-test v0.29.2)",
+    "preflight": "PASS",
+    "preflight_final": "PASS",
+    "check_cli": "OK: genlayer CLI 0.39.1",
+    "verify_studionet": "OK: Studionet chain ID 61999 at https://studio.genlayer.com/api"
+  },
+  "historical_pre_fix_deployment": {
+    "note": "Superseded. This was the deployment of the UNFIXED contract source (validator treated leader result as a plain dict instead of unwrapping gl.vm.Return), which caused every assess_action call to be rejected by validators regardless of leader correctness. Kept here only as historical evidence for the root-cause narrative in BUILD_STATUS.md.",
+    "riskclock_address": "0x9374d4BEC24A58a1f3b639c21C5Dd79f68B2C1Cd",
+    "executor_address": "0x3E329F774aa86EEEb1096dDbFEA6919464E511E9",
+    "disagreement_tx_count": 22,
+    "disagreement_tx_hashes": [
+      "0x73e641bff7f7238329e6ff5705c0ec2d6c588934f4b82b627c36fb7239560897",
+      "0xf568847a297475e6752f9d0017a5d4aabe874aa179638fc5f113834a0107ff97",
+      "0x3de1f788dee47ad49eebcebd7a7daca17170f837127b5f97a4776e56e78e762d",
+      "0xdf14fc47829cc84d62a620f651f5e2edc7abf1fe8ac98a5dc11b1d96689a120d",
+      "0xba286d942f409dcb01efcc5fda84d4d73137faad0ea88c74372f7648944fd750",
+      "0xfd3e14c5b47c194d648dfbc01ad824ab9a6e5bbf42e612fddb9d2d1415c84123",
+      "0x01ba7fef7a083ee5e232c00c496af8d13c4708a5d3c71b9e67d85c521df612ea",
+      "0xe690efcf45f87e42e54cee1e40dfad9fe454bf2a5017ce1a392a4d13c0ac8dcb",
+      "0x0121c2b85ae153724ce15a9e3fc3488c1a4b0008317816a19549ee6ebb88eb11",
+      "0x5432bf8d02b00986ab698eaa8542e1c74c918e7a7798c751654cddae00110c53",
+      "0x2166689d66ee72f01e16cf1df1dfbed6116db10ad2f09883cd9046685be75a58",
+      "0x7afbcdbf9ee5be3d4b3366928ba62439229167f3e3a674e063f6bd45d368340e",
+      "0x3068f44227459f11dc7bab8105bc2b2eaef1111c6603897c648c6e2286ed7cdf",
+      "0x335680a6bb99f33c9e28989256dcc05f222069eb04ba710b411b0b0f0fbe81b1",
+      "0xefc3f404f760c1b59ef25bc013ead95141452c04474f59ca7353a7420ed1d1dc",
+      "0xfe2055a76b3eb3762399f6cce4721b8c75f65cb698dc676fbb3e7be21d0666e7"
+    ],
+    "corrected_root_cause": "The validator function indexed the leader result as a plain dict; on live GenVM the leader result is wrapped in gl.vm.Return with the payload in .calldata. This meant validate() either crashed or always compared against garbage, so it rejected every leader proposal regardless of correctness. The cross-model-heterogeneity explanation recorded at the time was incorrect and is superseded by this finding. After fixing validate() to unwrap gl.vm.Return, the same class of action reached real substantive MAJORITY_AGREE consensus on the first attempt every time in this session (see live_lifecycle_cases above)."
+  },
+  "notes": "Real evidence only. Both contracts are live and independently verified via genlayer schema and multiple round-trips. Every transaction hash above was independently confirmed either via the runner script's own receipt wait or a follow-up `genlayer call` state read (not merely a 'finalized' status, which as this session demonstrated can still represent a reverted call)."
 }

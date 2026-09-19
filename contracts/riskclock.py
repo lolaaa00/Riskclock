@@ -16,14 +16,32 @@ import typing
 POLICY_DRAFT = 0
 POLICY_SEALED = 1
 
+# Action lifecycle. A retryable non-decision (model/infra failure) keeps an
+# action PENDING: it is not a semantic verdict and must never become
+# executable. ASSESSED is the only state produced by a genuine substantive
+# consensus outcome. ASSESS_EXHAUSTED is a terminal, non-executable state
+# reached only after MAX_ASSESSMENT_ATTEMPTS consecutive non-decisions.
 ACTION_PENDING = 0
 ACTION_ASSESSED = 1
 ACTION_CANCELLED = 2
+ACTION_REVOKED = 3
+ACTION_ASSESS_EXHAUSTED = 4
 
 TIER_LOW = 1
 TIER_MEDIUM = 2
 TIER_HIGH = 3
 TIER_CRITICAL = 4
+
+# Outcome of a single assess_action consensus round. SUBSTANTIVE is the only
+# outcome that may ever produce ASSESSED state. The other two are explicit
+# non-decisions: the model/infra failed to produce a usable result, and that
+# fact itself is what consensus agrees on, not a risk judgement.
+OUTCOME_SUBSTANTIVE = "SUBSTANTIVE"
+OUTCOME_MODEL_OUTPUT_INVALID = "MODEL_OUTPUT_INVALID"
+OUTCOME_SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
+NON_DECISION_OUTCOMES = (OUTCOME_MODEL_OUTPUT_INVALID, OUTCOME_SOURCE_UNAVAILABLE)
+
+MAX_ASSESSMENT_ATTEMPTS = 12
 
 MAX_NAME_LEN = 96
 MAX_CHARTER_LEN = 3000
@@ -34,6 +52,8 @@ MAX_REASON_LEN = 600
 MAX_APPROVERS = 8
 MAX_DELAY_SECONDS = 30 * 24 * 60 * 60
 
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
 ERR_EXPECTED = "EXPECTED"
 
 TIER_NAMES = {
@@ -41,6 +61,14 @@ TIER_NAMES = {
     TIER_MEDIUM: "MEDIUM",
     TIER_HIGH: "HIGH",
     TIER_CRITICAL: "CRITICAL",
+}
+
+ACTION_STATUS_NAMES = {
+    ACTION_PENDING: "PENDING",
+    ACTION_ASSESSED: "ASSESSED",
+    ACTION_CANCELLED: "CANCELLED",
+    ACTION_REVOKED: "REVOKED",
+    ACTION_ASSESS_EXHAUSTED: "ASSESS_EXHAUSTED",
 }
 
 SEMANTIC_DIMENSIONS = (
@@ -82,6 +110,7 @@ class ActionRecord:
     policy_id: u256
     policy_hash: str
     proposer: Address
+    intended_executor: Address
     target_ref: str
     operation: str
     value: u256
@@ -103,6 +132,10 @@ class ActionRecord:
     executable_after: u256
     reason: str
     approvals: DynArray[Address]
+    assessment_attempts: u32
+    last_assessment_result: str
+    revoked_at: u256
+    revoked_by: Address
 
 
 # ---------------------------------------------------------------------------
@@ -155,12 +188,24 @@ class ActionAssessed(gl.Event):
     def __init__(self, action_id: u256, tier: u8, /, **blob): ...
 
 
+class ActionAssessmentNonDecision(gl.Event):
+    def __init__(self, action_id: u256, outcome: str, /, **blob): ...
+
+
+class ActionAssessmentExhausted(gl.Event):
+    def __init__(self, action_id: u256, attempts: u32, /, **blob): ...
+
+
 class ActionApproved(gl.Event):
     def __init__(self, action_id: u256, approver: Address, /, **blob): ...
 
 
 class ActionCancelled(gl.Event):
     def __init__(self, action_id: u256, proposer: Address, /, **blob): ...
+
+
+class ActionRevoked(gl.Event):
+    def __init__(self, action_id: u256, revoked_by: Address, /, **blob): ...
 
 
 # ---------------------------------------------------------------------------
@@ -207,11 +252,16 @@ def parse_int(value: typing.Any, field: str, minimum: int, maximum: int) -> int:
     return number
 
 
-def canonical_policy_config(raw: str) -> str:
-    try:
-        parsed = json.loads(str(raw))
-    except Exception as error:
-        raise gl.vm.UserError(f"{ERR_EXPECTED}: config_json is not valid JSON") from error
+def canonical_policy_config(raw: typing.Any) -> str:
+    # Accept either a JSON string or a pre-parsed dict (the GenLayer CLI converts
+    # JSON-shaped string args to dicts before reaching the contract).
+    if isinstance(raw, dict):
+        parsed = raw
+    else:
+        try:
+            parsed = json.loads(str(raw))
+        except Exception as error:
+            raise gl.vm.UserError(f"{ERR_EXPECTED}: config_json is not valid JSON") from error
 
     if not isinstance(parsed, dict):
         raise gl.vm.UserError(f"{ERR_EXPECTED}: config_json must be a JSON object")
@@ -382,8 +432,15 @@ def parse_model_json(raw: typing.Any) -> dict:
     raise ValueError("model output is not a JSON object")
 
 
-def canonical_model_levels(raw: typing.Any) -> dict:
-    """Parse a bounded semantic risk vector. Malformed output fails maximally closed."""
+def canonical_model_levels(raw: typing.Any) -> typing.Optional[dict]:
+    """Parse a bounded semantic risk vector from raw model output.
+
+    Returns None when the output cannot be parsed into the fixed protocol
+    shape. A None here is an explicit non-decision (OUTCOME_MODEL_OUTPUT_INVALID)
+    at the call site, never a synthesized worst-case risk verdict: an assessor
+    that cannot produce a usable answer has not judged the action risky, it
+    has simply failed to answer, and those are different protocol outcomes.
+    """
     try:
         obj = parse_model_json(raw)
         levels = {
@@ -394,14 +451,7 @@ def canonical_model_levels(raw: typing.Any) -> dict:
         reason = clean_text(obj.get("reason", ""), MAX_REASON_LEN)
         return {**levels, "reason_code": reason_code, "reason": reason}
     except Exception:
-        return {
-            "reversibility": 3,
-            "privilege_expansion": 3,
-            "external_effect": 3,
-            "recovery_difficulty": 3,
-            "reason_code": "MALFORMED_MODEL_OUTPUT",
-            "reason": "semantic risk assessor output could not be parsed; fail closed",
-        }
+        return None
 
 
 def policy_definition_hash(
@@ -421,19 +471,35 @@ def policy_definition_hash(
 
 
 def action_definition_hash(
+    action_id: int,
     policy_id: int,
     policy_hash: str,
+    proposer: str,
+    intended_executor: str,
     target_ref: str,
     operation: str,
     value: int,
     payload_hash: str,
     purpose: str,
 ) -> str:
+    """Bind every field the protocol or a downstream consumer relies on for
+    identity or authorization into one immutable digest.
+
+    action_id makes every submission globally unique on this RiskClock
+    instance even when two submissions are otherwise byte-identical, so a
+    consumer's replay-protection map (keyed by this hash) can never conflate
+    two independently authorized actions. proposer and intended_executor are
+    bound so that neither can be swapped after submission without changing
+    the hash a downstream contract is required to pin.
+    """
     payload = {
+        "action_id": int(action_id),
+        "intended_executor": str(intended_executor).lower(),
         "operation": str(operation),
         "payload_hash": str(payload_hash).lower(),
         "policy_hash": str(policy_hash).lower(),
         "policy_id": int(policy_id),
+        "proposer": str(proposer).lower(),
         "purpose": str(purpose),
         "target_ref": str(target_ref),
         "value": int(value),
@@ -520,6 +586,10 @@ def address_in(values, target: Address) -> bool:
     return False
 
 
+def is_zero_address(value: Address) -> bool:
+    return str(value).lower() == ZERO_ADDRESS
+
+
 # ---------------------------------------------------------------------------
 # Contract
 # ---------------------------------------------------------------------------
@@ -530,6 +600,13 @@ class RiskClock(gl.Contract):
     GenLayer consensus classifies bounded semantic risk dimensions. The
     contract, not the LLM, maps the resulting risk vector to a score, tier,
     delay, and approval threshold under an immutable policy definition.
+
+    A model/infrastructure failure to produce a usable assessment is an
+    explicit, retryable non-decision (OUTCOME_MODEL_OUTPUT_INVALID /
+    OUTCOME_SOURCE_UNAVAILABLE). It is recorded and increments an attempt
+    counter, but it never establishes a risk tier and can never make an
+    action executable. Only a genuine substantive consensus outcome
+    (OUTCOME_SUBSTANTIVE) can move an action to ASSESSED.
     """
 
     policies: TreeMap[u256, RiskPolicy]
@@ -598,6 +675,8 @@ class RiskClock(gl.Contract):
         self._require_policy_owner(policy)
         if int(policy.status) != POLICY_DRAFT:
             raise gl.vm.UserError(f"{ERR_EXPECTED}: policy is already sealed")
+        if is_zero_address(approver):
+            raise gl.vm.UserError(f"{ERR_EXPECTED}: approver cannot be the zero address")
         if len(policy.approvers) >= MAX_APPROVERS:
             raise gl.vm.UserError(f"{ERR_EXPECTED}: approver limit reached")
         if address_in(policy.approvers, approver):
@@ -646,6 +725,7 @@ class RiskClock(gl.Contract):
         value: u256,
         payload_hash: str,
         purpose: str,
+        intended_executor: Address,
     ) -> u256:
         policy = self._require_policy(policy_id)
         if int(policy.status) != POLICY_SEALED or not bool(policy.active):
@@ -660,21 +740,32 @@ class RiskClock(gl.Contract):
         if target_ref == "" or operation == "" or purpose == "":
             raise gl.vm.UserError(f"{ERR_EXPECTED}: target_ref, operation, and purpose are required")
 
+        proposer = gl.message.sender_address
+        action_id = self.next_action_id
+        self.next_action_id = u256(int(self.next_action_id) + 1)
+
+        # intended_executor may be the zero address to intentionally leave the
+        # action unrestricted; a non-zero value is bound into the action hash
+        # so a downstream consumer can enforce it as an authorization
+        # boundary rather than treating "LOW + zero friction" as implicit
+        # universal authorization.
         digest = action_definition_hash(
+            int(action_id),
             int(policy_id),
             policy.definition_hash,
+            str(proposer),
+            str(intended_executor),
             target_ref,
             operation,
             int(value),
             payload_hash,
             purpose,
         )
-        action_id = self.next_action_id
-        self.next_action_id = u256(int(self.next_action_id) + 1)
         self.actions[action_id] = ActionRecord(
             policy_id=policy_id,
             policy_hash=str(policy.definition_hash),
-            proposer=gl.message.sender_address,
+            proposer=proposer,
+            intended_executor=intended_executor,
             target_ref=target_ref,
             operation=operation,
             value=value,
@@ -696,8 +787,12 @@ class RiskClock(gl.Contract):
             executable_after=u256(0),
             reason="",
             approvals=[],
+            assessment_attempts=u32(0),
+            last_assessment_result="",
+            revoked_at=u256(0),
+            revoked_by=Address(ZERO_ADDRESS),
         )
-        ActionSubmitted(action_id, gl.message.sender_address, action_hash=digest).emit()
+        ActionSubmitted(action_id, proposer, action_hash=digest).emit()
         return action_id
 
     @gl.public.write
@@ -712,21 +807,68 @@ class RiskClock(gl.Contract):
         action.status = u8(ACTION_CANCELLED)
         ActionCancelled(action_id, action.proposer).emit()
 
-    def _assess_once(self, policy: RiskPolicy, action: ActionRecord) -> dict:
+    @gl.public.write
+    def revoke_action(self, action_id: u256) -> None:
+        """Permanently disable an already-assessed action.
+
+        A policy-wide pause is a blunt operational instrument; revocation is
+        the deliberate, individually-authorized counterpart. Only the policy
+        owner may revoke, only an ASSESSED action can be revoked, the
+        historical assessment fields are left untouched (this is a status
+        change, not a rewrite of what consensus decided), and is_executable()
+        must return false forever afterward even if the policy is later
+        reactivated.
+        """
+        action = self._require_action(action_id)
+        if int(action.status) != ACTION_ASSESSED:
+            raise gl.vm.UserError(f"{ERR_EXPECTED}: only an assessed action can be revoked")
+        policy = self._require_policy(action.policy_id)
+        self._require_policy_owner(policy)
+        action.status = u8(ACTION_REVOKED)
+        action.revoked_at = u256(message_timestamp())
+        action.revoked_by = gl.message.sender_address
+        ActionRevoked(action_id, gl.message.sender_address).emit()
+
+    def _observe(self, policy: RiskPolicy, action: ActionRecord) -> dict:
+        """One independent semantic-risk observation.
+
+        This is called both by the leader and, independently, by every
+        validator (via a fresh call inside validate()). It never raises past
+        this point: a failed or unusable model call is converted into an
+        explicit non-decision outcome so that leader and validator can reach
+        a real, checkable agreement about *what happened*, instead of the
+        transaction reverting with no recorded evidence of the attempt.
+        """
         config = config_object(policy.config_json)
-        raw = gl.nondet.exec_prompt(
-            assessment_prompt(policy, action),
-            response_format="text",
-        )
+        try:
+            raw = gl.nondet.exec_prompt(
+                assessment_prompt(policy, action),
+                response_format="text",
+            )
+        except Exception as error:
+            return {
+                "outcome": OUTCOME_SOURCE_UNAVAILABLE,
+                "reason_code": "SOURCE_UNAVAILABLE",
+                "reason": clean_text(f"model call failed: {error}", MAX_REASON_LEN),
+            }
+
         semantic = canonical_model_levels(raw)
+        if semantic is None:
+            return {
+                "outcome": OUTCOME_MODEL_OUTPUT_INVALID,
+                "reason_code": "MODEL_OUTPUT_INVALID",
+                "reason": "semantic risk assessor output could not be parsed into the fixed protocol shape",
+            }
+
         derived = derived_assessment(semantic, int(action.value), config)
         return {
+            "outcome": OUTCOME_SUBSTANTIVE,
             **derived,
             "reason_code": str(semantic["reason_code"]),
             "reason": str(semantic["reason"]),
         }
 
-    def _assessment_shape_valid(self, value: typing.Any, config: dict, action_value: int) -> bool:
+    def _substantive_shape_valid(self, value: typing.Any, config: dict, action_value: int) -> bool:
         if not isinstance(value, dict):
             return False
         try:
@@ -766,47 +908,103 @@ class RiskClock(gl.Contract):
         config = config_object(policy.config_json)
 
         def observe() -> dict:
-            return self._assess_once(policy, action)
+            return self._observe(policy, action)
 
-        def validate(leader: dict) -> bool:
-            if not self._assessment_shape_valid(leader, config, int(action.value)):
+        def validate(leader_result) -> bool:
+            # On the live GenVM runtime, run_nondet_unsafe hands the
+            # validator the leader's raw wrapped return value, not a plain
+            # dict. Any leader path that raised (or a malformed wrapper)
+            # must be rejected here rather than blindly indexed into.
+            if not isinstance(leader_result, gl.vm.Return):
                 return False
+            leader = leader_result.calldata
+            if not isinstance(leader, dict) or "outcome" not in leader:
+                return False
+
             follower = observe()
-            if not self._assessment_shape_valid(follower, config, int(action.value)):
+
+            if leader["outcome"] != follower["outcome"]:
+                # The two independent observations did not even agree on
+                # what KIND of result happened (e.g. leader claims the
+                # source was unavailable but the validator's own call
+                # succeeded). That is itself grounds for rejection.
                 return False
-            # Consensus is over the execution consequence (risk tier), while
-            # allowing only one-level model variance on explanatory dimensions.
-            if int(leader["tier"]) != int(follower["tier"]):
-                return False
-            for key in SEMANTIC_DIMENSIONS:
-                if abs(int(leader[key]) - int(follower[key])) > 1:
+
+            if leader["outcome"] in NON_DECISION_OUTCOMES:
+                # A non-decision is validated by outcome-type agreement: both
+                # the leader and the validator, independently, failed to
+                # obtain a usable substantive result for the same reason.
+                # This is not a subjective judgement call; it is exactly the
+                # kind of fact a validator can and must check for itself.
+                return True
+
+            if leader["outcome"] == OUTCOME_SUBSTANTIVE:
+                # Consensus is over the execution consequence (risk tier),
+                # while allowing only one-level model variance on
+                # explanatory dimensions -- the leader's semantic judgement
+                # is checked on its substance, not merely its shape.
+                if not self._substantive_shape_valid(leader, config, int(action.value)):
                     return False
-            return True
+                if not self._substantive_shape_valid(follower, config, int(action.value)):
+                    return False
+                if int(leader["tier"]) != int(follower["tier"]):
+                    return False
+                for key in SEMANTIC_DIMENSIONS:
+                    if abs(int(leader[key]) - int(follower[key])) > 1:
+                        return False
+                return True
+
+            return False
 
         result = gl.vm.run_nondet_unsafe(observe, validate)
-        assessed_at = message_timestamp()
-        action.reversibility = u8(int(result["reversibility"]))
-        action.privilege_expansion = u8(int(result["privilege_expansion"]))
-        action.value_at_risk = u8(int(result["value_at_risk"]))
-        action.external_effect = u8(int(result["external_effect"]))
-        action.recovery_difficulty = u8(int(result["recovery_difficulty"]))
-        action.weighted_score = u32(int(result["weighted_score"]))
-        action.tier = u8(int(result["tier"]))
-        action.delay_seconds = u256(int(result["delay_seconds"]))
-        action.approvals_required = u8(int(result["approvals_required"]))
-        action.assessed_at = u256(assessed_at)
-        action.executable_after = u256(assessed_at + int(result["delay_seconds"]))
+
+        action.assessment_attempts = u32(int(action.assessment_attempts) + 1)
+        action.last_assessment_result = str(result.get("outcome", ""))
+
+        if result.get("outcome") == OUTCOME_SUBSTANTIVE:
+            assessed_at = message_timestamp()
+            action.reversibility = u8(int(result["reversibility"]))
+            action.privilege_expansion = u8(int(result["privilege_expansion"]))
+            action.value_at_risk = u8(int(result["value_at_risk"]))
+            action.external_effect = u8(int(result["external_effect"]))
+            action.recovery_difficulty = u8(int(result["recovery_difficulty"]))
+            action.weighted_score = u32(int(result["weighted_score"]))
+            action.tier = u8(int(result["tier"]))
+            action.delay_seconds = u256(int(result["delay_seconds"]))
+            action.approvals_required = u8(int(result["approvals_required"]))
+            action.assessed_at = u256(assessed_at)
+            action.executable_after = u256(assessed_at + int(result["delay_seconds"]))
+            action.reason = clean_text(
+                f"{result.get('reason_code', 'ASSESSED')}: {result.get('reason', '')}",
+                MAX_REASON_LEN,
+            )
+            action.status = u8(ACTION_ASSESSED)
+            ActionAssessed(
+                action_id,
+                action.tier,
+                score=int(action.weighted_score),
+                executable_after=int(action.executable_after),
+            ).emit()
+            return
+
+        # Explicit non-decision: the action stays PENDING (or moves to the
+        # terminal ASSESS_EXHAUSTED state once the attempt cap is reached).
+        # No risk field is touched, executable_after stays 0, and
+        # is_executable() can never see this as ASSESSED.
         action.reason = clean_text(
-            f"{result.get('reason_code', 'ASSESSED')}: {result.get('reason', '')}",
+            f"{result.get('reason_code', result.get('outcome', 'NON_DECISION'))}: "
+            f"{result.get('reason', '')}",
             MAX_REASON_LEN,
         )
-        action.status = u8(ACTION_ASSESSED)
-        ActionAssessed(
-            action_id,
-            action.tier,
-            score=int(action.weighted_score),
-            executable_after=int(action.executable_after),
-        ).emit()
+        if int(action.assessment_attempts) >= MAX_ASSESSMENT_ATTEMPTS:
+            action.status = u8(ACTION_ASSESS_EXHAUSTED)
+            ActionAssessmentExhausted(action_id, action.assessment_attempts).emit()
+        else:
+            ActionAssessmentNonDecision(
+                action_id,
+                str(result.get("outcome", "")),
+                attempt=int(action.assessment_attempts),
+            ).emit()
 
     @gl.public.write
     def approve_action(self, action_id: u256) -> None:
@@ -856,6 +1054,7 @@ class RiskClock(gl.Contract):
             "policy_id": int(action.policy_id),
             "policy_hash": str(action.policy_hash),
             "proposer": str(action.proposer),
+            "intended_executor": str(action.intended_executor),
             "target_ref": str(action.target_ref),
             "operation": str(action.operation),
             "value": int(action.value),
@@ -863,6 +1062,7 @@ class RiskClock(gl.Contract):
             "purpose": str(action.purpose),
             "action_hash": str(action.action_hash),
             "status": int(action.status),
+            "status_name": ACTION_STATUS_NAMES.get(int(action.status), "UNKNOWN"),
             "created_at": int(action.created_at),
             "assessed_at": int(action.assessed_at),
             "risk_vector": {
@@ -881,6 +1081,10 @@ class RiskClock(gl.Contract):
             "approvals": addresses_as_strings(action.approvals),
             "executable_after": int(action.executable_after),
             "reason": str(action.reason),
+            "assessment_attempts": int(action.assessment_attempts),
+            "last_assessment_result": str(action.last_assessment_result),
+            "revoked_at": int(action.revoked_at),
+            "revoked_by": str(action.revoked_by),
         }
 
     @gl.public.view
@@ -908,6 +1112,11 @@ class RiskClock(gl.Contract):
             return False
         if len(action.approvals) < int(action.approvals_required):
             return False
+        # A zero-delay action has no time constraint: skip the timestamp read so
+        # that is_executable remains callable from cross-contract view contexts
+        # where gl.message.raw.datetime may be unavailable.
+        if int(action.delay_seconds) == 0:
+            return True
         try:
             now = message_timestamp()
         except Exception:
@@ -923,6 +1132,13 @@ class RiskClock(gl.Contract):
                 "HIGH": TIER_HIGH,
                 "CRITICAL": TIER_CRITICAL,
             },
+            "action_statuses": {str(k): v for k, v in ACTION_STATUS_NAMES.items()},
+            "assessment_outcomes": {
+                "SUBSTANTIVE": OUTCOME_SUBSTANTIVE,
+                "MODEL_OUTPUT_INVALID": OUTCOME_MODEL_OUTPUT_INVALID,
+                "SOURCE_UNAVAILABLE": OUTCOME_SOURCE_UNAVAILABLE,
+            },
+            "max_assessment_attempts": MAX_ASSESSMENT_ATTEMPTS,
             "dimensions": {
                 "reversibility": "semantic 0..3",
                 "privilege_expansion": "semantic 0..3",
